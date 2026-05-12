@@ -8,20 +8,19 @@ description = "Generate wedge coil PCB traces for PCB motor exploration."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-  { name = "Edward" },
+  { name = "Edward Chamberlain" },
 ]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = [
-  "matplotlib>=3.8",
-]
+dependencies = []
 dynamic = ["version"]
 
 [project.optional-dependencies]
 dev = [
   "flake8",
+  "matplotlib>=3.8",
   "pytest",
 ]
 
