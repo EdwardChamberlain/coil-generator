@@ -104,9 +104,9 @@ def test_wedge_coil_builds_from_scratch_algorithm() -> None:
         packing_factor=1.0,
     )
 
-    assert coil.statistics.turn_count == 4
+    assert coil.statistics.turn_count == 3
     assert coil.statistics.angular_width_degrees == pytest.approx(40.0)
-    assert len(coil.segments) == 15
+    assert len(coil.segments) == 11
     assert isinstance(coil.segments[0], wedge_generator.ArcSegment)
     assert isinstance(coil.segments[1], wedge_generator.LineSegment)
     assert coil.segments[0].direction == "counterclockwise"
@@ -124,18 +124,46 @@ def test_wedge_coil_leaves_half_gap_at_each_angular_side() -> None:
         packing_factor=0.0,
     )
     outer_arc = coil.segments[0]
-    expected_side_clearance_angle = wedge_generator.WedgeCoil.arclength_to_angle(20.0, 0.25)
+    expected_side_clearance = (coil.statistics.track_width / 2.0) + (coil.minimum_track_gap / 2.0)
+    expected_side_clearance_angle = wedge_generator.WedgeCoil.arclength_to_angle(outer_arc.radius, expected_side_clearance)
 
     assert outer_arc.start_angle_degrees == pytest.approx(-20.0 + expected_side_clearance_angle)
     assert outer_arc.end_angle_degrees == pytest.approx(20.0 - expected_side_clearance_angle)
 
 
 def test_wedge_coil_packing_factor_controls_turn_count() -> None:
-    sparse_coil = wedge_generator.WedgeCoil(20.0, 40.0, 9, 1.0, 0.5, 0.0)
-    dense_coil = wedge_generator.WedgeCoil(20.0, 40.0, 9, 1.0, 0.5, 1.0)
+    sparse_coil = wedge_generator.WedgeCoil(20.0, 60.0, 9, 0.1, 0.1, 0.0)
+    dense_coil = wedge_generator.WedgeCoil(20.0, 60.0, 9, 0.1, 0.1, 1.0)
 
     assert sparse_coil.statistics.turn_count == 1
+    assert sparse_coil.statistics.track_width > dense_coil.statistics.track_width
     assert dense_coil.statistics.turn_count > sparse_coil.statistics.turn_count
+    assert dense_coil.statistics.track_width == pytest.approx(0.1)
+
+
+def test_wedge_coil_track_gap_is_edge_to_edge() -> None:
+    coil = wedge_generator.WedgeCoil(20.0, 60.0, 9, 0.1, 0.1, 1.0)
+    outer_arcs = [
+        coil.segments[index]
+        for index in range(0, len(coil.segments), 4)
+    ]
+    edge_gaps = [
+        outer_arcs[index].radius - outer_arcs[index + 1].radius - coil.statistics.track_width
+        for index in range(len(outer_arcs) - 1)
+    ]
+
+    assert edge_gaps
+    assert min(edge_gaps) == pytest.approx(0.1)
+
+
+def test_wedge_coil_adjacent_motor_coils_have_full_edge_gap() -> None:
+    coil = wedge_generator.WedgeCoil(20.0, 60.0, 9, 0.1, 0.1, 1.0)
+    outer_arc = coil.segments[0]
+    next_coil_start_angle = outer_arc.start_angle_degrees + coil.angular_width_degrees
+    centerline_arc_gap = math.radians(next_coil_start_angle - outer_arc.end_angle_degrees) * outer_arc.radius
+    edge_arc_gap = centerline_arc_gap - coil.statistics.track_width
+
+    assert edge_arc_gap == pytest.approx(coil.minimum_track_gap)
 
 
 def test_wedge_coil_motor_plot_uses_segment_patches() -> None:

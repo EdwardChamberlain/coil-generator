@@ -46,31 +46,37 @@ class LineSegment:
 
         return math.dist((self.start_point.x, self.start_point.y), (self.end_point.x, self.end_point.y))
 
-    def plot(self, line_width: float, axis: matplotlib.axes.Axes | None = None) -> matplotlib.patches.PathPatch:
+    def plot(self, line_width: float, axis: matplotlib.axes.Axes | None = None) -> matplotlib.patches.Polygon:
         """Draw the segment on a matplotlib axis.
 
         :param line_width: Rendered line width.
         :param axis: Optional existing matplotlib axis.
         """
 
-        import matplotlib.path
         import matplotlib.patches
         import matplotlib.pyplot
 
         if axis is None:
             axis = matplotlib.pyplot.gca()
 
-        line_path = matplotlib.path.Path(
-            vertices=[(self.start_point.x, self.start_point.y), (self.end_point.x, self.end_point.y)],
-            codes=[matplotlib.path.Path.MOVETO, matplotlib.path.Path.LINETO],
-        )
-        line_patch = matplotlib.patches.PathPatch(
-            line_path,
-            fill=False,
+        length = self.length
+        if length <= 0.0:
+            raise ValueError("Cannot plot a zero-length line segment.")
+
+        perpendicular_x = -((self.end_point.y - self.start_point.y) / length) * (line_width / 2.0)
+        perpendicular_y = ((self.end_point.x - self.start_point.x) / length) * (line_width / 2.0)
+        vertices = [
+            (self.start_point.x + perpendicular_x, self.start_point.y + perpendicular_y),
+            (self.end_point.x + perpendicular_x, self.end_point.y + perpendicular_y),
+            (self.end_point.x - perpendicular_x, self.end_point.y - perpendicular_y),
+            (self.start_point.x - perpendicular_x, self.start_point.y - perpendicular_y),
+        ]
+        line_patch = matplotlib.patches.Polygon(
+            vertices,
+            closed=True,
+            facecolor="black",
             edgecolor="black",
-            linewidth=line_width,
-            capstyle="round",
-            joinstyle="round",
+            linewidth=0.0,
         )
         axis.add_patch(line_patch)
         return line_patch
@@ -127,7 +133,7 @@ class ArcSegment:
             return -angle_radians
         return angle_radians
 
-    def plot(self, line_width: float, axis: matplotlib.axes.Axes | None = None) -> matplotlib.patches.Arc:
+    def plot(self, line_width: float, axis: matplotlib.axes.Axes | None = None) -> matplotlib.patches.Wedge:
         """Draw the arc on a matplotlib axis.
 
         :param line_width: Rendered line width.
@@ -141,16 +147,15 @@ class ArcSegment:
             axis = matplotlib.pyplot.gca()
 
         theta1, theta2 = self._matplotlib_angle_limits()
-        arc_patch = matplotlib.patches.Arc(
-            xy=(self.center_point.x, self.center_point.y),
-            width=2.0 * self.radius,
-            height=2.0 * self.radius,
-            angle=0.0,
+        arc_patch = matplotlib.patches.Wedge(
+            center=(self.center_point.x, self.center_point.y),
+            r=self.radius + (line_width / 2.0),
             theta1=theta1,
             theta2=theta2,
-            linewidth=line_width,
-            color="black",
-            capstyle="round",
+            width=line_width,
+            facecolor="black",
+            edgecolor="black",
+            linewidth=0.0,
         )
         axis.add_patch(arc_patch)
         return arc_patch
@@ -438,9 +443,9 @@ class WedgeCoil(Coil):
     :param inner_diameter: Inner coil diameter in millimetres.
     :param outer_diameter: Outer coil diameter in millimetres.
     :param coil_count: Number of coils around the full motor.
-    :param minimum_track_width: Track width in millimetres.
+    :param minimum_track_width: Minimum allowed track width in millimetres.
     :param minimum_track_gap: Minimum edge gap between neighbouring tracks.
-    :param packing_factor: Value from 0 to 1 selecting fewer through to more turns.
+    :param packing_factor: Value from 0 to 1 selecting one thick turn through to maximum thin turns.
     :param center_angle_degrees: Centre angle of the wedge.
     """
 
@@ -464,12 +469,17 @@ class WedgeCoil(Coil):
         self.inner_radius = self.inner_diameter / 2.0
         self.outer_radius = self.outer_diameter / 2.0
         self.angular_width_degrees = 360.0 / self.coil_count
-        self.centerline_spacing = self.minimum_track_width + self.minimum_track_gap
-        self.side_clearance = self.minimum_track_gap / 2.0
 
         self._validate_inputs()
+        self.maximum_turn_count = self._maximum_turn_count_for_width(self.minimum_track_width)
+        if self.maximum_turn_count < 1:
+            raise ValueError("The requested dimensions cannot fit one coil turn.")
         self.turn_count = self._calculate_turn_count()
-        super().__init__(track_width=self.minimum_track_width)
+        generated_track_width = self._calculate_track_width()
+        self.centerline_spacing = generated_track_width + self.minimum_track_gap
+        self.side_clearance = (generated_track_width / 2.0) + (self.minimum_track_gap / 2.0)
+
+        super().__init__(track_width=generated_track_width)
         self.build_coil()
 
     @property
@@ -515,9 +525,9 @@ class WedgeCoil(Coil):
         return figure, selected_axis
 
     def _add_turn(self, turn_index: int) -> None:
-        outer_radius = self.outer_radius - (turn_index * self.centerline_spacing)
-        inner_radius = self.inner_radius + (turn_index * self.centerline_spacing)
-        next_outer_radius = self.outer_radius - ((turn_index + 1) * self.centerline_spacing)
+        outer_radius = self._outer_centerline_radius(turn_index, self.track_width)
+        inner_radius = self._inner_centerline_radius(turn_index, self.track_width)
+        next_outer_radius = self._outer_centerline_radius(turn_index + 1, self.track_width)
 
         outer_start_angle = self._minimum_angle_for_radius(outer_radius, max(turn_index - 1, 0))
         outer_end_angle = self._maximum_angle_for_radius(outer_radius, turn_index)
@@ -560,44 +570,75 @@ class WedgeCoil(Coil):
             raise ValueError("minimum_track_gap must be greater than or equal to 0.")
         if not 0.0 <= self.packing_factor <= 1.0:
             raise ValueError("packing_factor must be between 0 and 1 inclusive.")
-        if self._maximum_turn_count() < 1:
-            raise ValueError("The requested dimensions cannot fit one coil turn.")
 
     def _calculate_turn_count(self) -> int:
-        maximum_turn_count = self._maximum_turn_count()
-        interpolated_turn_count = 1.0 + (self.packing_factor * (maximum_turn_count - 1))
+        interpolated_turn_count = 1.0 + (self.packing_factor * (self.maximum_turn_count - 1))
         return int(math.floor(interpolated_turn_count + 0.5))
 
-    def _maximum_turn_count(self) -> int:
+    def _calculate_track_width(self) -> float:
+        maximum_track_width = self._maximum_track_width_for_turn_count(self.turn_count)
+        return self.minimum_track_width + ((1.0 - self.packing_factor) * (maximum_track_width - self.minimum_track_width))
+
+    def _maximum_track_width_for_turn_count(self, turn_count: int) -> float:
         radial_width = self.outer_radius - self.inner_radius
-        maximum_radial_turn_count = max(0, int(math.floor((radial_width - self.minimum_track_width) / (2.0 * self.centerline_spacing))) + 1)
+        low = self.minimum_track_width
+        high = radial_width
+        for _ in range(80):
+            midpoint = (low + high) / 2.0
+            if self._turn_count_fits(turn_count, midpoint):
+                low = midpoint
+            else:
+                high = midpoint
+        return low
+
+    def _maximum_turn_count_for_width(self, track_width: float) -> int:
+        radial_width = self.outer_radius - self.inner_radius
+        centerline_spacing = track_width + self.minimum_track_gap
+        maximum_radial_turn_count = max(0, int(math.floor((radial_width - track_width) / (2.0 * centerline_spacing))) + 1)
         turn_count = 0
         for candidate_turn_count in range(1, maximum_radial_turn_count + 1):
-            if self._turn_count_has_angular_room(candidate_turn_count):
+            if self._turn_count_fits(candidate_turn_count, track_width):
                 turn_count = candidate_turn_count
         return turn_count
 
-    def _turn_count_has_angular_room(self, turn_count: int) -> bool:
+    def _turn_count_fits(self, turn_count: int, track_width: float) -> bool:
+        if turn_count < 1 or track_width < self.minimum_track_width:
+            return False
         for turn_index in range(turn_count):
-            outer_radius = self.outer_radius - (turn_index * self.centerline_spacing)
-            inner_radius = self.inner_radius + (turn_index * self.centerline_spacing)
-            outer_start_angle = self._minimum_angle_for_radius(outer_radius, max(turn_index - 1, 0))
-            outer_end_angle = self._maximum_angle_for_radius(outer_radius, turn_index)
-            inner_start_angle = self._maximum_angle_for_radius(inner_radius, turn_index)
-            inner_end_angle = self._minimum_angle_for_radius(inner_radius, turn_index)
+            outer_radius = self._outer_centerline_radius(turn_index, track_width)
+            inner_radius = self._inner_centerline_radius(turn_index, track_width)
+            if outer_radius - inner_radius < (track_width + self.minimum_track_gap):
+                return False
+            outer_start_angle = self._minimum_angle_for_radius(outer_radius, max(turn_index - 1, 0), track_width)
+            outer_end_angle = self._maximum_angle_for_radius(outer_radius, turn_index, track_width)
+            inner_start_angle = self._maximum_angle_for_radius(inner_radius, turn_index, track_width)
+            inner_end_angle = self._minimum_angle_for_radius(inner_radius, turn_index, track_width)
             if outer_start_angle >= outer_end_angle:
                 return False
             if inner_end_angle >= inner_start_angle:
                 return False
         return True
 
-    def _minimum_angle_for_radius(self, radius: float, spacing_count: int) -> float:
-        angular_offset = self.arclength_to_angle(radius, self.side_clearance + (self.centerline_spacing * spacing_count))
+    def _outer_centerline_radius(self, turn_index: int, track_width: float) -> float:
+        centerline_spacing = track_width + self.minimum_track_gap
+        return self.outer_radius - (track_width / 2.0) - (turn_index * centerline_spacing)
+
+    def _inner_centerline_radius(self, turn_index: int, track_width: float) -> float:
+        centerline_spacing = track_width + self.minimum_track_gap
+        return self.inner_radius + (track_width / 2.0) + (turn_index * centerline_spacing)
+
+    def _minimum_angle_for_radius(self, radius: float, spacing_count: int, track_width: float | None = None) -> float:
+        angular_offset = self.arclength_to_angle(radius, self._side_offset(spacing_count, track_width))
         return self.center_angle_degrees - (self.angular_width_degrees / 2.0) + angular_offset
 
-    def _maximum_angle_for_radius(self, radius: float, spacing_count: int) -> float:
-        angular_offset = self.arclength_to_angle(radius, self.side_clearance + (self.centerline_spacing * spacing_count))
+    def _maximum_angle_for_radius(self, radius: float, spacing_count: int, track_width: float | None = None) -> float:
+        angular_offset = self.arclength_to_angle(radius, self._side_offset(spacing_count, track_width))
         return self.center_angle_degrees + (self.angular_width_degrees / 2.0) - angular_offset
+
+    def _side_offset(self, spacing_count: int, track_width: float | None = None) -> float:
+        selected_track_width = self.track_width if track_width is None else track_width
+        centerline_spacing = selected_track_width + self.minimum_track_gap
+        return (selected_track_width / 2.0) + (self.minimum_track_gap / 2.0) + (centerline_spacing * spacing_count)
 
     @staticmethod
     def polar_to_cartesian(radius: float, angle_degrees: float) -> CoilPoint:

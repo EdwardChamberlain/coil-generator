@@ -1,4 +1,4 @@
-# Wedge Generator
+# Wedge Coils Generator
 
 Generate PCB motor wedge coils, or build custom coil paths from simple line and arc primitives.
 
@@ -9,8 +9,8 @@ coil = wedge_generator.WedgeCoil(
     inner_diameter=20.0,
     outer_diameter=60.0,
     coil_count=9,
-    minimum_track_width=1.0,
-    minimum_track_gap=0.5,
+    minimum_track_width=0.1,
+    minimum_track_gap=0.1,
     packing_factor=1.0,
 )
 
