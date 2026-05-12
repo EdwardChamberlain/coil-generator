@@ -1,12 +1,9 @@
 import math
 import xml.etree.ElementTree
 
-import matplotlib
 import pytest
 
 import wedge_generator
-
-matplotlib.use("Agg")
 
 
 def test_add_line_updates_segments_and_total_length() -> None:
@@ -75,30 +72,23 @@ def test_export_svg_writes_valid_svg_file(tmp_path) -> None:
     assert output_path.exists()
     root = xml.etree.ElementTree.fromstring(output_path.read_text(encoding="utf-8"))
     namespace = {"svg": "http://www.w3.org/2000/svg"}
+    background = root.find("svg:rect", namespace)
     path = root.find("svg:path", namespace)
 
     assert root.attrib["width"].endswith("mm")
     assert "viewBox" in root.attrib
+    assert background is not None
+    assert background.attrib["fill"] == "white"
     assert path is not None
     assert path.attrib["d"].startswith("M ")
     assert float(path.attrib["stroke-width"]) == pytest.approx(0.5)
-
-
-def test_plot_returns_figure_and_axis() -> None:
-    coil = wedge_generator.Coil(track_width=0.5)
-    coil.add_line((0.0, 0.0), (5.0, 0.0))
-
-    figure, axis = coil.plot(show=False)
-
-    assert figure is axis.figure
-    assert len(axis.patches) == 1
 
 
 def test_wedge_coil_builds_from_scratch_algorithm() -> None:
     coil = wedge_generator.WedgeCoil(
         inner_diameter=20.0,
         outer_diameter=40.0,
-        coil_count=9,
+        motor_coil_count=9,
         minimum_track_width=1.0,
         minimum_track_gap=0.5,
         packing_factor=1.0,
@@ -118,7 +108,7 @@ def test_wedge_coil_leaves_half_gap_at_each_angular_side() -> None:
     coil = wedge_generator.WedgeCoil(
         inner_diameter=20.0,
         outer_diameter=40.0,
-        coil_count=9,
+        motor_coil_count=9,
         minimum_track_width=1.0,
         minimum_track_gap=0.5,
         packing_factor=0.0,
@@ -166,10 +156,20 @@ def test_wedge_coil_adjacent_motor_coils_have_full_edge_gap() -> None:
     assert edge_arc_gap == pytest.approx(coil.minimum_track_gap)
 
 
-def test_wedge_coil_motor_plot_uses_segment_patches() -> None:
+def test_wedge_coil_export_motor_svg_writes_all_coils(tmp_path) -> None:
     coil = wedge_generator.WedgeCoil(20.0, 40.0, 9, 1.0, 0.5, 0.0)
+    output_path = coil.export_motor_svg(tmp_path / "motor.svg")
 
-    figure, axis = coil.plot_motor(show=False)
+    root = xml.etree.ElementTree.fromstring(output_path.read_text(encoding="utf-8"))
+    namespace = {"svg": "http://www.w3.org/2000/svg"}
+    background = root.find("svg:rect", namespace)
+    paths = root.findall("svg:path", namespace)
 
-    assert figure is axis.figure
-    assert len(axis.patches) == len(coil.segments) * coil.coil_count
+    assert output_path.exists()
+    assert root.attrib["width"].endswith("mm")
+    assert "viewBox" in root.attrib
+    assert background is not None
+    assert background.attrib["fill"] == "white"
+    assert len(paths) == coil.motor_coil_count
+    assert all(path.attrib["d"].startswith("M ") for path in paths)
+    assert all(float(path.attrib["stroke-width"]) == pytest.approx(coil.statistics.track_width) for path in paths)

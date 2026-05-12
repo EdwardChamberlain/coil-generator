@@ -8,15 +8,14 @@ import wedge_generator
 coil = wedge_generator.WedgeCoil(
     inner_diameter=20.0,
     outer_diameter=60.0,
-    coil_count=9,
+    motor_coil_count=9,
     minimum_track_width=0.1,
     minimum_track_gap=0.1,
     packing_factor=1.0,
 )
 
 coil.export_svg()
-coil.plot()
-coil.plot_motor()
+coil.export_motor_svg()
 print(coil.total_track_length)
 ```
 
@@ -26,4 +25,4 @@ Run the basic demo with:
 python examples/basic_demo.py
 ```
 
-It writes an SVG and plot images to `demo_output/`.
+It writes SVGs to `demo_output/`.

@@ -5,12 +5,6 @@ from __future__ import annotations
 import dataclasses
 import math
 import pathlib
-import typing
-
-if typing.TYPE_CHECKING:
-    import matplotlib.axes
-    import matplotlib.figure
-    import matplotlib.patches
 
 ARC_DIRECTION_ALIASES = {
     "clockwise": "clockwise",
@@ -45,41 +39,6 @@ class LineSegment:
         """Segment length in millimetres."""
 
         return math.dist((self.start_point.x, self.start_point.y), (self.end_point.x, self.end_point.y))
-
-    def plot(self, line_width: float, axis: matplotlib.axes.Axes | None = None) -> matplotlib.patches.Polygon:
-        """Draw the segment on a matplotlib axis.
-
-        :param line_width: Rendered line width.
-        :param axis: Optional existing matplotlib axis.
-        """
-
-        import matplotlib.patches
-        import matplotlib.pyplot
-
-        if axis is None:
-            axis = matplotlib.pyplot.gca()
-
-        length = self.length
-        if length <= 0.0:
-            raise ValueError("Cannot plot a zero-length line segment.")
-
-        perpendicular_x = -((self.end_point.y - self.start_point.y) / length) * (line_width / 2.0)
-        perpendicular_y = ((self.end_point.x - self.start_point.x) / length) * (line_width / 2.0)
-        vertices = [
-            (self.start_point.x + perpendicular_x, self.start_point.y + perpendicular_y),
-            (self.end_point.x + perpendicular_x, self.end_point.y + perpendicular_y),
-            (self.end_point.x - perpendicular_x, self.end_point.y - perpendicular_y),
-            (self.start_point.x - perpendicular_x, self.start_point.y - perpendicular_y),
-        ]
-        line_patch = matplotlib.patches.Polygon(
-            vertices,
-            closed=True,
-            facecolor="black",
-            edgecolor="black",
-            linewidth=0.0,
-        )
-        axis.add_patch(line_patch)
-        return line_patch
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -132,38 +91,6 @@ class ArcSegment:
         if self.direction == "clockwise":
             return -angle_radians
         return angle_radians
-
-    def plot(self, line_width: float, axis: matplotlib.axes.Axes | None = None) -> matplotlib.patches.Wedge:
-        """Draw the arc on a matplotlib axis.
-
-        :param line_width: Rendered line width.
-        :param axis: Optional existing matplotlib axis.
-        """
-
-        import matplotlib.patches
-        import matplotlib.pyplot
-
-        if axis is None:
-            axis = matplotlib.pyplot.gca()
-
-        theta1, theta2 = self._matplotlib_angle_limits()
-        arc_patch = matplotlib.patches.Wedge(
-            center=(self.center_point.x, self.center_point.y),
-            r=self.radius + (line_width / 2.0),
-            theta1=theta1,
-            theta2=theta2,
-            width=line_width,
-            facecolor="black",
-            edgecolor="black",
-            linewidth=0.0,
-        )
-        axis.add_patch(arc_patch)
-        return arc_patch
-
-    def _matplotlib_angle_limits(self) -> tuple[float, float]:
-        if self.direction == "clockwise":
-            return self.end_angle_degrees, self.end_angle_degrees + self.sweep_angle_degrees
-        return self.start_angle_degrees, self.start_angle_degrees + self.sweep_angle_degrees
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -302,34 +229,12 @@ class Coil:
         output_path.write_text(self._build_svg(), encoding="utf-8")
         return output_path
 
-    def plot(
-        self,
-        axis: matplotlib.axes.Axes | None = None,
-        show: bool = True,
-    ) -> tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]:
-        """Render the coil using matplotlib.
-
-        :param axis: Optional existing matplotlib axis.
-        :param show: Show the plot before returning when true.
-        """
-
-        figure, selected_axis = self._resolve_axis(axis)
-        for segment in self._segments:
-            segment.plot(line_width=self.track_width, axis=selected_axis)
-        points = self.path_points
-        if points:
-            selected_axis.scatter([points[0].x], [points[0].y], color="tab:green", s=24, zorder=3)
-            selected_axis.scatter([points[-1].x], [points[-1].y], color="tab:red", s=24, zorder=3)
-        self._style_axis(selected_axis)
-        if show:
-            import matplotlib.pyplot
-
-            matplotlib.pyplot.show()
-        return figure, selected_axis
-
     def _build_svg(self) -> str:
         points = self.path_points
-        drawing_limit = self._drawing_limit(points)
+        return self._build_svg_from_paths((points,))
+
+    def _build_svg_from_paths(self, path_points: tuple[tuple[CoilPoint, ...], ...]) -> str:
+        drawing_limit = self._drawing_limit(tuple(point for points in path_points for point in points))
         size = 2.0 * drawing_limit
         view_box_values = (
             self._format_number(-drawing_limit),
@@ -337,13 +242,21 @@ class Coil:
             self._format_number(size),
             self._format_number(size),
         )
-        path_data = self._build_svg_path_data(points)
+        path_elements = "\n".join(
+            (
+                f'  <path d="{self._build_svg_path_data(points)}" fill="none" stroke="black" '
+                f'stroke-width="{self._format_number(self.track_width)}" stroke-linecap="butt" stroke-linejoin="round"/>'
+            )
+            for points in path_points
+            if points
+        )
         return (
             '<?xml version="1.0" encoding="UTF-8"?>\n'
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{self._format_number(size)}mm" height="{self._format_number(size)}mm" '
             f'viewBox="{" ".join(view_box_values)}">\n'
-            f'  <path d="{path_data}" fill="none" stroke="black" stroke-width="{self._format_number(self.track_width)}" '
-            'stroke-linecap="butt" stroke-linejoin="round"/>\n'
+            f'  <rect x="{self._format_number(-drawing_limit)}" y="{self._format_number(-drawing_limit)}" '
+            f'width="{self._format_number(size)}" height="{self._format_number(size)}" fill="white"/>\n'
+            f"{path_elements}\n"
             "</svg>\n"
         )
 
@@ -369,23 +282,6 @@ class Coil:
             )
             for index in range(start_index, step_count + 1)
         ]
-
-    def _style_axis(self, axis: matplotlib.axes.Axes) -> None:
-        points = self.path_points
-        drawing_limit = self._drawing_limit(points)
-        axis.set_aspect("equal", adjustable="box")
-        axis.set_xlim(-drawing_limit, drawing_limit)
-        axis.set_ylim(-drawing_limit, drawing_limit)
-        axis.set_xlabel("x (mm)")
-        axis.set_ylabel("y (mm)")
-
-    def _resolve_axis(self, axis: matplotlib.axes.Axes | None) -> tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]:
-        if axis is not None:
-            return axis.figure, axis
-        import matplotlib.pyplot
-
-        figure, created_axis = matplotlib.pyplot.subplots()
-        return figure, created_axis
 
     def _drawing_limit(self, points: tuple[CoilPoint, ...]) -> float:
         if not points:
@@ -442,7 +338,7 @@ class WedgeCoil(Coil):
 
     :param inner_diameter: Inner coil diameter in millimetres.
     :param outer_diameter: Outer coil diameter in millimetres.
-    :param coil_count: Number of coils around the full motor.
+    :param motor_coil_count: Number of coils around the full motor.
     :param minimum_track_width: Minimum allowed track width in millimetres.
     :param minimum_track_gap: Minimum edge gap between neighbouring tracks.
     :param packing_factor: Value from 0 to 1 selecting one thick turn through to maximum thin turns.
@@ -453,7 +349,7 @@ class WedgeCoil(Coil):
         self,
         inner_diameter: float,
         outer_diameter: float,
-        coil_count: int,
+        motor_coil_count: int,
         minimum_track_width: float,
         minimum_track_gap: float,
         packing_factor: float,
@@ -461,14 +357,14 @@ class WedgeCoil(Coil):
     ) -> None:
         self.inner_diameter = float(inner_diameter)
         self.outer_diameter = float(outer_diameter)
-        self.coil_count = coil_count
+        self.motor_coil_count = motor_coil_count
         self.minimum_track_width = float(minimum_track_width)
         self.minimum_track_gap = float(minimum_track_gap)
         self.packing_factor = float(packing_factor)
         self.center_angle_degrees = float(center_angle_degrees)
         self.inner_radius = self.inner_diameter / 2.0
         self.outer_radius = self.outer_diameter / 2.0
-        self.angular_width_degrees = 360.0 / self.coil_count
+        self.angular_width_degrees = 360.0 / self.motor_coil_count
 
         self._validate_inputs()
         self.maximum_turn_count = self._maximum_turn_count_for_width(self.minimum_track_width)
@@ -504,25 +400,16 @@ class WedgeCoil(Coil):
         for turn_index in range(self.turn_count):
             self._add_turn(turn_index)
 
-    def plot_motor(
-        self,
-        axis: matplotlib.axes.Axes | None = None,
-        show: bool = True,
-    ) -> tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]:
-        """Render this wedge coil around a full motor."""
+    def export_motor_svg(self, file_path: str | pathlib.Path = "wedge_motor.svg") -> pathlib.Path:
+        """Write an SVG rendering of all motor coils and return the written path.
 
-        figure, selected_axis = self._resolve_axis(axis)
-        original_segments = tuple(self._segments)
-        for coil_index in range(self.coil_count):
-            rotation_degrees = coil_index * self.angular_width_degrees
-            for segment in original_segments:
-                self._rotate_segment(segment, rotation_degrees).plot(line_width=self.track_width, axis=selected_axis)
-        self._style_axis(selected_axis)
-        if show:
-            import matplotlib.pyplot
+        :param file_path: Destination path for the SVG file.
+        """
 
-            matplotlib.pyplot.show()
-        return figure, selected_axis
+        output_path = pathlib.Path(file_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(self._build_motor_svg(), encoding="utf-8")
+        return output_path
 
     def _add_turn(self, turn_index: int) -> None:
         outer_radius = self._outer_centerline_radius(turn_index, self.track_width)
@@ -557,13 +444,20 @@ class WedgeCoil(Coil):
                 end_point=self.polar_to_cartesian(next_outer_radius, next_outer_end_angle),
             )
 
+    def _build_motor_svg(self) -> str:
+        coil_paths = tuple(
+            tuple(self._rotate_point(point, coil_index * self.angular_width_degrees) for point in self.path_points)
+            for coil_index in range(self.motor_coil_count)
+        )
+        return self._build_svg_from_paths(coil_paths)
+
     def _validate_inputs(self) -> None:
         if self.inner_diameter <= 0.0:
             raise ValueError("inner_diameter must be greater than 0.")
         if self.outer_diameter <= self.inner_diameter:
             raise ValueError("outer_diameter must be greater than inner_diameter.")
-        if isinstance(self.coil_count, bool) or not isinstance(self.coil_count, int) or self.coil_count < 1:
-            raise ValueError("coil_count must be an integer greater than or equal to 1.")
+        if isinstance(self.motor_coil_count, bool) or not isinstance(self.motor_coil_count, int) or self.motor_coil_count < 1:
+            raise ValueError("motor_coil_count must be an integer greater than or equal to 1.")
         if self.minimum_track_width <= 0.0:
             raise ValueError("minimum_track_width must be greater than 0.")
         if self.minimum_track_gap < 0.0:
