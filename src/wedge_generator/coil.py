@@ -465,6 +465,7 @@ class WedgeCoil(Coil):
         self.outer_radius = self.outer_diameter / 2.0
         self.angular_width_degrees = 360.0 / self.coil_count
         self.centerline_spacing = self.minimum_track_width + self.minimum_track_gap
+        self.side_clearance = self.minimum_track_gap / 2.0
 
         self._validate_inputs()
         self.turn_count = self._calculate_turn_count()
@@ -591,11 +592,11 @@ class WedgeCoil(Coil):
         return True
 
     def _minimum_angle_for_radius(self, radius: float, spacing_count: int) -> float:
-        angular_offset = self.arclength_to_angle(radius, self.centerline_spacing * spacing_count)
+        angular_offset = self.arclength_to_angle(radius, self.side_clearance + (self.centerline_spacing * spacing_count))
         return self.center_angle_degrees - (self.angular_width_degrees / 2.0) + angular_offset
 
     def _maximum_angle_for_radius(self, radius: float, spacing_count: int) -> float:
-        angular_offset = self.arclength_to_angle(radius, self.centerline_spacing * spacing_count)
+        angular_offset = self.arclength_to_angle(radius, self.side_clearance + (self.centerline_spacing * spacing_count))
         return self.center_angle_degrees + (self.angular_width_degrees / 2.0) - angular_offset
 
     @staticmethod

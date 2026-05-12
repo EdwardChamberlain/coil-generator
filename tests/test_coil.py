@@ -114,6 +114,22 @@ def test_wedge_coil_builds_from_scratch_algorithm() -> None:
     assert coil.total_track_length > 0.0
 
 
+def test_wedge_coil_leaves_half_gap_at_each_angular_side() -> None:
+    coil = wedge_generator.WedgeCoil(
+        inner_diameter=20.0,
+        outer_diameter=40.0,
+        coil_count=9,
+        minimum_track_width=1.0,
+        minimum_track_gap=0.5,
+        packing_factor=0.0,
+    )
+    outer_arc = coil.segments[0]
+    expected_side_clearance_angle = wedge_generator.WedgeCoil.arclength_to_angle(20.0, 0.25)
+
+    assert outer_arc.start_angle_degrees == pytest.approx(-20.0 + expected_side_clearance_angle)
+    assert outer_arc.end_angle_degrees == pytest.approx(20.0 - expected_side_clearance_angle)
+
+
 def test_wedge_coil_packing_factor_controls_turn_count() -> None:
     sparse_coil = wedge_generator.WedgeCoil(20.0, 40.0, 9, 1.0, 0.5, 0.0)
     dense_coil = wedge_generator.WedgeCoil(20.0, 40.0, 9, 1.0, 0.5, 1.0)
