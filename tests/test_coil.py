@@ -5,6 +5,16 @@ import pytest
 
 import wedge_generator
 
+TEST_TOLERANCE = 1e-8
+
+
+def _point_radius(point: wedge_generator.CoilPoint) -> float:
+    return math.hypot(point.x, point.y)
+
+
+def _point_angle_degrees(point: wedge_generator.CoilPoint) -> float:
+    return math.degrees(math.atan2(point.y, point.x))
+
 
 def test_add_line_updates_segments_and_total_length() -> None:
     coil = wedge_generator.Coil(track_width=0.5)
@@ -84,6 +94,31 @@ def test_export_svg_writes_valid_svg_file(tmp_path) -> None:
     assert float(path.attrib["stroke-width"]) == pytest.approx(0.5)
 
 
+def test_public_api_exports_expected_classes() -> None:
+    from wedge_generator import ArcSegment
+    from wedge_generator import Coil
+    from wedge_generator import CoilPoint
+    from wedge_generator import CoilStatistics
+    from wedge_generator import LineSegment
+    from wedge_generator import WedgeCoil
+
+    assert wedge_generator.__all__ == [
+        "ArcSegment",
+        "Coil",
+        "CoilPoint",
+        "CoilStatistics",
+        "LineSegment",
+        "WedgeCoil",
+    ]
+    assert ArcSegment is wedge_generator.ArcSegment
+    assert Coil is wedge_generator.Coil
+    assert CoilPoint is wedge_generator.CoilPoint
+    assert CoilStatistics is wedge_generator.CoilStatistics
+    assert LineSegment is wedge_generator.LineSegment
+    assert WedgeCoil is wedge_generator.WedgeCoil
+    assert WedgeCoil(20.0, 40.0, motor_coil_count=9, minimum_track_width=1.0, minimum_track_gap=0.5, packing_factor=1.0)
+
+
 def test_wedge_coil_builds_from_scratch_algorithm() -> None:
     coil = wedge_generator.WedgeCoil(
         inner_diameter=20.0,
@@ -102,6 +137,35 @@ def test_wedge_coil_builds_from_scratch_algorithm() -> None:
     assert coil.segments[0].direction == "counterclockwise"
     assert coil.segments[2].direction == "clockwise"
     assert coil.total_track_length > 0.0
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"inner_diameter": 0.0}, "inner_diameter"),
+        ({"outer_diameter": 20.0}, "outer_diameter"),
+        ({"motor_coil_count": 0}, "motor_coil_count"),
+        ({"motor_coil_count": True}, "motor_coil_count"),
+        ({"minimum_track_width": 0.0}, "minimum_track_width"),
+        ({"minimum_track_gap": -0.1}, "minimum_track_gap"),
+        ({"packing_factor": -0.1}, "packing_factor"),
+        ({"packing_factor": 1.1}, "packing_factor"),
+        ({"outer_diameter": 20.1, "minimum_track_width": 1.0, "minimum_track_gap": 1.0}, "cannot fit one coil turn"),
+    ],
+)
+def test_wedge_coil_rejects_invalid_inputs(overrides, message) -> None:
+    arguments = {
+        "inner_diameter": 20.0,
+        "outer_diameter": 60.0,
+        "motor_coil_count": 9,
+        "minimum_track_width": 0.1,
+        "minimum_track_gap": 0.1,
+        "packing_factor": 0.5,
+    }
+    arguments.update(overrides)
+
+    with pytest.raises(ValueError, match=message):
+        wedge_generator.WedgeCoil(**arguments)
 
 
 def test_wedge_coil_leaves_half_gap_at_each_angular_side() -> None:
@@ -129,6 +193,105 @@ def test_wedge_coil_packing_factor_controls_turn_count() -> None:
     assert sparse_coil.statistics.track_width > dense_coil.statistics.track_width
     assert dense_coil.statistics.turn_count > sparse_coil.statistics.turn_count
     assert dense_coil.statistics.track_width == pytest.approx(0.1)
+
+
+def test_wedge_coil_packing_factor_is_monotonic() -> None:
+    packing_factors = [0.0, 0.25, 0.5, 0.75, 1.0]
+    coils = [
+        wedge_generator.WedgeCoil(20.0, 60.0, 9, 0.1, 0.1, packing_factor)
+        for packing_factor in packing_factors
+    ]
+    turn_counts = [coil.statistics.turn_count for coil in coils]
+    track_widths = [coil.statistics.track_width for coil in coils]
+
+    assert turn_counts == sorted(turn_counts)
+    assert track_widths == sorted(track_widths, reverse=True)
+    assert turn_counts[0] == 1
+    assert track_widths[-1] == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {
+            "inner_diameter": 20.0,
+            "outer_diameter": 60.0,
+            "motor_coil_count": 9,
+            "minimum_track_width": 0.1,
+            "minimum_track_gap": 0.1,
+            "packing_factor": 1.0,
+            "center_angle_degrees": 25.0,
+        },
+        {
+            "inner_diameter": 20.0,
+            "outer_diameter": 50.0,
+            "motor_coil_count": 12,
+            "minimum_track_width": 0.2,
+            "minimum_track_gap": 0.15,
+            "packing_factor": 0.5,
+            "center_angle_degrees": 30.0,
+        },
+        {
+            "inner_diameter": 40.0,
+            "outer_diameter": 80.0,
+            "motor_coil_count": 9,
+            "minimum_track_width": 0.1,
+            "minimum_track_gap": 0.1,
+            "packing_factor": 0.25,
+            "center_angle_degrees": 15.0,
+        },
+    ],
+)
+def test_wedge_coil_geometry_stays_inside_edge_aware_bounds(arguments) -> None:
+    coil = wedge_generator.WedgeCoil(**arguments)
+    minimum_centerline_radius = coil.inner_radius + (coil.statistics.track_width / 2.0)
+    maximum_centerline_radius = coil.outer_radius - (coil.statistics.track_width / 2.0)
+    minimum_angle = coil.center_angle_degrees - (coil.angular_width_degrees / 2.0)
+    maximum_angle = coil.center_angle_degrees + (coil.angular_width_degrees / 2.0)
+    minimum_side_clearance = (coil.statistics.track_width / 2.0) + (coil.minimum_track_gap / 2.0)
+
+    for point in coil.path_points:
+        radius = _point_radius(point)
+        angle_degrees = _point_angle_degrees(point)
+        left_clearance = math.radians(angle_degrees - minimum_angle) * radius
+        right_clearance = math.radians(maximum_angle - angle_degrees) * radius
+
+        assert radius >= minimum_centerline_radius - TEST_TOLERANCE
+        assert radius <= maximum_centerline_radius + TEST_TOLERANCE
+        assert minimum_angle <= angle_degrees <= maximum_angle
+        assert left_clearance >= minimum_side_clearance - TEST_TOLERANCE
+        assert right_clearance >= minimum_side_clearance - TEST_TOLERANCE
+
+
+@pytest.mark.parametrize(
+    "coil",
+    [
+        wedge_generator.WedgeCoil(20.0, 60.0, 9, 0.1, 0.1, 1.0),
+        wedge_generator.WedgeCoil(20.0, 50.0, 12, 0.2, 0.15, 0.5),
+    ],
+)
+def test_wedge_coil_radial_track_gaps_are_edge_to_edge(coil) -> None:
+    outer_arcs = [
+        coil.segments[index]
+        for index in range(0, len(coil.segments), 4)
+    ]
+    inner_arcs = [
+        coil.segments[index]
+        for index in range(2, len(coil.segments), 4)
+    ]
+    outer_edge_gaps = [
+        outer_arcs[index].radius - outer_arcs[index + 1].radius - coil.statistics.track_width
+        for index in range(len(outer_arcs) - 1)
+    ]
+    inner_edge_gaps = [
+        inner_arcs[index + 1].radius - inner_arcs[index].radius - coil.statistics.track_width
+        for index in range(len(inner_arcs) - 1)
+    ]
+
+    assert outer_edge_gaps
+    assert inner_edge_gaps
+    assert min(outer_edge_gaps) >= coil.minimum_track_gap - TEST_TOLERANCE
+    assert min(inner_edge_gaps) >= coil.minimum_track_gap - TEST_TOLERANCE
 
 
 def test_wedge_coil_track_gap_is_edge_to_edge() -> None:

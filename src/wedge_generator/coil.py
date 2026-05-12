@@ -364,9 +364,9 @@ class WedgeCoil(Coil):
         self.center_angle_degrees = float(center_angle_degrees)
         self.inner_radius = self.inner_diameter / 2.0
         self.outer_radius = self.outer_diameter / 2.0
-        self.angular_width_degrees = 360.0 / self.motor_coil_count
 
         self._validate_inputs()
+        self.angular_width_degrees = 360.0 / self.motor_coil_count
         self.maximum_turn_count = self._maximum_turn_count_for_width(self.minimum_track_width)
         if self.maximum_turn_count < 1:
             raise ValueError("The requested dimensions cannot fit one coil turn.")
